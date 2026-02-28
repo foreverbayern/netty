@@ -1,0 +1,28 @@
+# Maven build outputs
+target/
+
+# Runtime data (uploaded files)
+data/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+out/
+
+# VS Code
+.vscode/
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
