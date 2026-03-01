@@ -5,12 +5,16 @@ import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.LastHttpContent;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 public class UploadHandler {
+    private static final long SLOW_MS = nonNegative(Long.getLong("slow.ms", 0L));
+    private static final long SLOW_ASYNC_MS = nonNegative(Long.getLong("slow.async.ms", SLOW_MS));
+
     private final Path dataDir;
 
     private FileChannel currentChannel;
@@ -41,6 +45,7 @@ public class UploadHandler {
         }
 
         ByteBuf content = httpContent.content();
+        long bytesBeforeChunk = bytesWritten;
         while (content.isReadable()) {
             int written = content.readBytes(currentChannel, content.readableBytes());
             if (written <= 0) {
@@ -48,8 +53,37 @@ public class UploadHandler {
             }
             bytesWritten += written;
         }
+        if (bytesWritten > bytesBeforeChunk) {
+            maybeSleepAfterChunk(SLOW_MS);
+        }
 
         if (httpContent instanceof LastHttpContent) {
+            UploadResult result = new UploadResult(currentPath.getFileName().toString(), bytesWritten, keepAlive);
+            closeChannelQuietly();
+            return result;
+        }
+
+        return null;
+    }
+
+    public UploadResult handleChunkBytes(byte[] bytes, boolean lastChunk) throws IOException {
+        if (currentChannel == null) {
+            throw new IllegalStateException("No active upload");
+        }
+
+        if (bytes.length > 0) {
+            ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
+            while (byteBuffer.hasRemaining()) {
+                int written = currentChannel.write(byteBuffer);
+                if (written <= 0) {
+                    throw new IOException("Failed to write upload chunk");
+                }
+                bytesWritten += written;
+            }
+            maybeSleepAfterChunk(SLOW_ASYNC_MS);
+        }
+
+        if (lastChunk) {
             UploadResult result = new UploadResult(currentPath.getFileName().toString(), bytesWritten, keepAlive);
             closeChannelQuietly();
             return result;
@@ -86,6 +120,22 @@ public class UploadHandler {
         currentPath = null;
         bytesWritten = 0L;
         keepAlive = false;
+    }
+
+    private static void maybeSleepAfterChunk(long sleepMs) throws IOException {
+        if (sleepMs <= 0L) {
+            return;
+        }
+        try {
+            Thread.sleep(sleepMs);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while applying upload delay", ex);
+        }
+    }
+
+    private static long nonNegative(long value) {
+        return Math.max(0L, value);
     }
 
     public record UploadResult(String filename, long bytesWritten, boolean keepAlive) {

@@ -8,12 +8,15 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.stream.ChunkedWriteHandler;
 
 import java.nio.file.Path;
+import java.util.concurrent.ExecutorService;
 
 public class FileServerInitializer extends ChannelInitializer<SocketChannel> {
     private final Path dataDir;
+    private final ExecutorService uploadIoExecutor;
 
-    public FileServerInitializer(Path dataDir) {
+    public FileServerInitializer(Path dataDir, ExecutorService uploadIoExecutor) {
         this.dataDir = dataDir;
+        this.uploadIoExecutor = uploadIoExecutor;
     }
 
     @Override
@@ -21,6 +24,6 @@ public class FileServerInitializer extends ChannelInitializer<SocketChannel> {
         ChannelPipeline pipeline = ch.pipeline();
         pipeline.addLast(new HttpServerCodec());
         pipeline.addLast(new ChunkedWriteHandler());
-        pipeline.addLast(new HttpRouterHandler(dataDir));
+        pipeline.addLast(new HttpRouterHandler(dataDir, uploadIoExecutor));
     }
 }

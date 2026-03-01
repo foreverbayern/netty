@@ -4,129 +4,341 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Netty 文件上传下载</title>
-    <style>
+        <style>
         :root {
-            --bg: #f5f7fb;
+            --bg: #f2f6f8;
+            --bg-accent-a: #dff4ec;
+            --bg-accent-b: #fff3d5;
             --card: #ffffff;
-            --text: #1f2937;
-            --muted: #6b7280;
-            --primary: #1d4ed8;
-            --danger: #b91c1c;
-            --border: #d1d5db;
+            --text: #132028;
+            --muted: #5b6d78;
+            --primary: #0f5f8a;
+            --primary-hover: #0a4a6c;
+            --danger: #b52d2d;
+            --border: #d7e2e9;
+            --shadow: 0 14px 38px rgba(14, 44, 59, 0.12);
+            --radius: 16px;
         }
-
         * {
             box-sizing: border-box;
         }
-
         body {
             margin: 0;
-            font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            font-family: "Avenir Next", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
             background: var(--bg);
             color: var(--text);
+            position: relative;
+            overflow-x: hidden;
+            min-height: 100vh;
         }
-
+        body::before,
+        body::after {
+            content: "";
+            position: fixed;
+            z-index: -1;
+            border-radius: 50%;
+            filter: blur(20px);
+        }
+        body::before {
+            width: 420px;
+            height: 420px;
+            left: -120px;
+            top: -110px;
+            background: radial-gradient(circle at center, var(--bg-accent-a), transparent 70%);
+        }
+        body::after {
+            width: 380px;
+            height: 380px;
+            right: -130px;
+            bottom: -120px;
+            background: radial-gradient(circle at center, var(--bg-accent-b), transparent 70%);
+        }
         .container {
-            max-width: 820px;
-            margin: 36px auto;
+            max-width: 940px;
+            margin: 42px auto;
             padding: 0 16px;
+            animation: fade-up 0.55s ease-out;
         }
-
         .title {
-            margin-bottom: 16px;
-            font-size: 28px;
-            font-weight: 700;
+            margin: 0 0 8px;
+            font-size: clamp(28px, 4vw, 42px);
+            font-weight: 800;
+            letter-spacing: 0.3px;
+            text-wrap: balance;
         }
-
         .subtitle {
-            margin-bottom: 24px;
+            margin-bottom: 26px;
             color: var(--muted);
+            font-size: 15px;
         }
-
+        .subtitle code {
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #e9f2f7;
+            color: #15445f;
+            border: 1px solid #d5e5ef;
+        }
         .card {
             background: var(--card);
             border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 18px;
-            margin-bottom: 16px;
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 18px;
+            box-shadow: var(--shadow);
+            transform: translateY(0);
+            transition: transform 0.18s ease, box-shadow 0.18s ease;
+            animation: fade-up 0.5s ease both;
         }
-
+        .card:nth-of-type(1) {
+            animation-delay: 0.08s;
+        }
+        .card:nth-of-type(2) {
+            animation-delay: 0.16s;
+        }
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 18px 42px rgba(14, 44, 59, 0.14);
+        }
         .card h2 {
             margin: 0 0 12px;
             font-size: 20px;
+            letter-spacing: 0.2px;
         }
-
         .row {
             display: grid;
             grid-template-columns: 160px 1fr;
-            gap: 10px;
+            gap: 12px;
             align-items: center;
-            margin-bottom: 10px;
+            margin-bottom: 11px;
         }
-
         label {
-            color: #374151;
-            font-size: 14px;
-        }
-
-        input[type="text"],
-        input[type="file"] {
-            width: 100%;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 8px 10px;
-            font-size: 14px;
-            background: #fff;
-        }
-
-        button {
-            border: none;
-            border-radius: 8px;
-            padding: 10px 14px;
+            color: #2e4a58;
             font-size: 14px;
             font-weight: 600;
-            color: #fff;
-            background: var(--primary);
-            cursor: pointer;
         }
-
+        input[type="text"],
+        input[type="file"],
+        select {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-size: 14px;
+            background: #fff;
+            color: var(--text);
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        input[type="file"] {
+            padding: 6px;
+            border-style: dashed;
+            background: linear-gradient(135deg, #ffffff, #f4fbff);
+            color: var(--muted);
+        }
+        input[type="file"]::file-selector-button {
+            border: none;
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-right: 10px;
+            background: linear-gradient(135deg, #15779c, #23a18a);
+            color: #fff;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.15s ease, filter 0.15s ease;
+        }
+        input[type="file"]::file-selector-button:hover {
+            transform: translateY(-1px);
+            filter: brightness(0.96);
+        }
+        .api-select {
+            position: relative;
+        }
+        .api-select-toggle {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: linear-gradient(135deg, #ffffff, #f6fbff);
+            padding: 10px 44px 10px 12px;
+            color: var(--text);
+            font-size: 14px;
+            font-weight: 600;
+            text-align: left;
+            cursor: pointer;
+            letter-spacing: 0;
+            box-shadow: none;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+        }
+        .api-select-toggle:hover {
+            border-color: #9abfd4;
+            background: linear-gradient(135deg, #ffffff, #f3f9fd);
+        }
+        .api-select-toggle:focus-visible {
+            outline: none;
+            border-color: #65a5c7;
+            box-shadow: 0 0 0 4px rgba(25, 118, 164, 0.14);
+        }
+        .api-select-caret {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            width: 10px;
+            height: 10px;
+            border-right: 2px solid #45677a;
+            border-bottom: 2px solid #45677a;
+            transform: translateY(-70%) rotate(45deg);
+            transition: transform 0.15s ease;
+            pointer-events: none;
+        }
+        .api-select.open .api-select-caret {
+            transform: translateY(-35%) rotate(-135deg);
+        }
+        .api-select-menu {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: calc(100% + 8px);
+            margin: 0;
+            padding: 6px;
+            list-style: none;
+            border: 1px solid #cbddea;
+            border-radius: 12px;
+            background: #ffffff;
+            box-shadow: 0 14px 26px rgba(12, 47, 68, 0.16);
+            z-index: 30;
+            display: none;
+        }
+        .api-select.open .api-select-menu {
+            display: block;
+        }
+        .api-select-option {
+            border-radius: 8px;
+            padding: 9px 10px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #294655;
+            cursor: pointer;
+            transition: background 0.12s ease, color 0.12s ease;
+        }
+        .api-select-option:hover {
+            background: #ecf6fc;
+            color: #18425a;
+        }
+        .api-select-option.active {
+            background: linear-gradient(135deg, #146d95, #1a8ba8);
+            color: #fff;
+        }
+        input[type="file"]:hover,
+        .api-select:hover .api-select-toggle {
+            border-color: #9abfd4;
+        }
+        input[type="text"]:focus,
+        input[type="file"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #65a5c7;
+            box-shadow: 0 0 0 4px rgba(25, 118, 164, 0.14);
+        }
+        button {
+            border: none;
+            border-radius: 10px;
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: 700;
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), #1580a5);
+            cursor: pointer;
+            letter-spacing: 0.2px;
+            transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease;
+            box-shadow: 0 6px 16px rgba(16, 98, 138, 0.26);
+        }
+        button:hover:not(:disabled) {
+            transform: translateY(-1px);
+            background: linear-gradient(135deg, var(--primary-hover), #116f91);
+        }
         button:disabled {
             cursor: not-allowed;
-            opacity: 0.65;
+            opacity: 0.62;
+            box-shadow: none;
         }
-
+        button.api-select-toggle,
+        button.api-select-toggle:hover:not(:disabled) {
+            transform: none;
+            box-shadow: none;
+            letter-spacing: 0;
+            background: linear-gradient(135deg, #ffffff, #f6fbff);
+            color: var(--text);
+        }
+        .api-select:hover button.api-select-toggle:hover:not(:disabled) {
+            background: linear-gradient(135deg, #ffffff, #f3f9fd);
+        }
         .actions {
             margin-top: 8px;
             display: flex;
-            gap: 8px;
+            gap: 10px;
         }
-
         .hint {
             font-size: 12px;
             color: var(--muted);
-            margin-top: 8px;
+            margin-top: 10px;
         }
-
         .result {
             margin-top: 10px;
-            padding: 10px;
-            border-radius: 8px;
-            background: #f9fafb;
-            border: 1px dashed var(--border);
-            font-family: Consolas, Monaco, monospace;
+            padding: 12px;
+            border-radius: 10px;
+            background: #f6fbff;
+            border: 1px dashed #c6dbe7;
+            font-family: "JetBrains Mono", Consolas, Monaco, monospace;
             font-size: 13px;
             white-space: pre-wrap;
-            min-height: 44px;
+            min-height: 52px;
         }
-
         .error {
             color: var(--danger);
+            border-color: #f0c4c4;
+            background: #fff7f7;
         }
-
         progress {
             width: 100%;
-            height: 14px;
-            margin-top: 8px;
+            height: 10px;
+            margin-top: 10px;
+            border: none;
+            border-radius: 999px;
+            overflow: hidden;
+            background: #e6edf2;
+        }
+        progress::-webkit-progress-bar {
+            background: #e6edf2;
+            border-radius: 999px;
+        }
+        progress::-webkit-progress-value {
+            background: linear-gradient(90deg, #167da1, #36b09d);
+            border-radius: 999px;
+            transition: width 0.15s linear;
+        }
+        progress::-moz-progress-bar {
+            background: linear-gradient(90deg, #167da1, #36b09d);
+            border-radius: 999px;
+        }
+        @media (max-width: 760px) {
+            .container {
+                margin: 26px auto;
+            }
+            .row {
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+            .card {
+                padding: 16px;
+            }
+        }
+        @keyframes fade-up {
+            from {
+                opacity: 0;
+                transform: translateY(14px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
     </style>
 </head>
@@ -144,6 +356,20 @@
         <div class="row">
             <label for="uploadName">服务器文件名</label>
             <input id="uploadName" type="text" placeholder="例如 demo.bin">
+        </div>
+        <div class="row">
+            <label for="uploadApiToggle">上传接口</label>
+            <div id="uploadApiSelect" class="api-select">
+                <button id="uploadApiToggle" class="api-select-toggle" type="button" aria-haspopup="listbox" aria-expanded="false">
+                    <span id="uploadApiLabel">/upload (EventLoop I/O)</span>
+                    <span class="api-select-caret" aria-hidden="true"></span>
+                </button>
+                <ul id="uploadApiMenu" class="api-select-menu" role="listbox">
+                    <li class="api-select-option active" data-value="/upload" aria-selected="true">/upload (EventLoop I/O)</li>
+                    <li class="api-select-option" data-value="/upload-async" aria-selected="false">/upload-async (ThreadPool I/O)</li>
+                </ul>
+                <input id="uploadApi" type="hidden" value="/upload">
+            </div>
         </div>
         <div class="actions">
             <button id="uploadBtn" type="button">开始上传</button>
@@ -175,6 +401,11 @@
 
         var uploadFileEl = document.getElementById("uploadFile");
         var uploadNameEl = document.getElementById("uploadName");
+        var uploadApiEl = document.getElementById("uploadApi");
+        var uploadApiSelectEl = document.getElementById("uploadApiSelect");
+        var uploadApiToggleEl = document.getElementById("uploadApiToggle");
+        var uploadApiLabelEl = document.getElementById("uploadApiLabel");
+        var uploadApiMenuEl = document.getElementById("uploadApiMenu");
         var uploadBtn = document.getElementById("uploadBtn");
         var uploadProgressEl = document.getElementById("uploadProgress");
         var uploadResultEl = document.getElementById("uploadResult");
@@ -192,6 +423,76 @@
             return (name || "").trim();
         }
 
+        function closeUploadApiMenu() {
+            if (!uploadApiSelectEl || !uploadApiToggleEl) {
+                return;
+            }
+            uploadApiSelectEl.classList.remove("open");
+            uploadApiToggleEl.setAttribute("aria-expanded", "false");
+        }
+
+        function openUploadApiMenu() {
+            if (!uploadApiSelectEl || !uploadApiToggleEl) {
+                return;
+            }
+            uploadApiSelectEl.classList.add("open");
+            uploadApiToggleEl.setAttribute("aria-expanded", "true");
+        }
+
+        function setUploadApi(value, labelText) {
+            if (uploadApiEl) {
+                uploadApiEl.value = value;
+            }
+            if (uploadApiLabelEl) {
+                uploadApiLabelEl.textContent = labelText;
+            }
+            if (!uploadApiMenuEl) {
+                return;
+            }
+            var options = uploadApiMenuEl.querySelectorAll(".api-select-option");
+            Array.prototype.forEach.call(options, function (optionEl) {
+                var isActive = optionEl.getAttribute("data-value") === value;
+                optionEl.classList.toggle("active", isActive);
+                optionEl.setAttribute("aria-selected", isActive ? "true" : "false");
+            });
+        }
+
+        if (uploadApiToggleEl && uploadApiSelectEl) {
+            uploadApiToggleEl.addEventListener("click", function () {
+                if (uploadApiSelectEl.classList.contains("open")) {
+                    closeUploadApiMenu();
+                } else {
+                    openUploadApiMenu();
+                }
+            });
+        }
+
+        if (uploadApiMenuEl) {
+            uploadApiMenuEl.addEventListener("click", function (event) {
+                var optionEl = event.target.closest(".api-select-option");
+                if (!optionEl) {
+                    return;
+                }
+                setUploadApi(optionEl.getAttribute("data-value"), optionEl.textContent);
+                closeUploadApiMenu();
+            });
+        }
+
+        document.addEventListener("click", function (event) {
+            if (!uploadApiSelectEl) {
+                return;
+            }
+            if (!uploadApiSelectEl.contains(event.target)) {
+                closeUploadApiMenu();
+            }
+        });
+
+        document.addEventListener("keydown", function (event) {
+            if (event.key === "Escape") {
+                closeUploadApiMenu();
+            }
+        });
+
         uploadFileEl.addEventListener("change", function () {
             if (!uploadNameEl.value && uploadFileEl.files && uploadFileEl.files.length > 0) {
                 uploadNameEl.value = uploadFileEl.files[0].name;
@@ -201,6 +502,8 @@
         uploadBtn.addEventListener("click", function () {
             var file = uploadFileEl.files && uploadFileEl.files[0];
             var filename = sanitizeName(uploadNameEl.value);
+            var uploadApi = (uploadApiEl && uploadApiEl.value) ? uploadApiEl.value : "/upload";
+            var uploadStartedAt = Date.now();
 
             if (!file) {
                 setResult(uploadResultEl, "请选择要上传的文件。", true);
@@ -215,15 +518,37 @@
             uploadProgressEl.value = 0;
             setResult(uploadResultEl, "上传中...", false);
 
-            var url = API_BASE + "/upload?filename=" + encodeURIComponent(filename);
+            var url = API_BASE + uploadApi + "?filename=" + encodeURIComponent(filename);
             var xhr = new XMLHttpRequest();
+            var waitingForServer = false;
             xhr.open("POST", url, true);
             xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+            function elapsedMsText() {
+                var elapsedSec = (Date.now() - uploadStartedAt) / 1000;
+                return "Elapsed: " + elapsedSec.toFixed(3) + " s";
+            }
 
             xhr.upload.onprogress = function (event) {
                 if (event.lengthComputable) {
                     var percent = (event.loaded / event.total) * 100;
-                    uploadProgressEl.value = percent;
+                    if (percent >= 100) {
+                        uploadProgressEl.value = 99;
+                        if (!waitingForServer) {
+                            waitingForServer = true;
+                            setResult(uploadResultEl, "File sent. Waiting for server processing...\n" + elapsedMsText(), false);
+                        }
+                    } else {
+                        uploadProgressEl.value = percent;
+                    }
+                }
+            };
+
+            xhr.upload.onload = function () {
+                if (!waitingForServer) {
+                    waitingForServer = true;
+                    uploadProgressEl.value = Math.max(uploadProgressEl.value, 99);
+                    setResult(uploadResultEl, "File sent. Waiting for server processing...\n" + elapsedMsText(), false);
                 }
             };
 
@@ -233,20 +558,20 @@
 
                 var text = xhr.responseText || "";
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    setResult(uploadResultEl, "上传成功\nHTTP " + xhr.status + "\n" + text, false);
+                    setResult(uploadResultEl, "Upload success\nHTTP " + xhr.status + "\n" + text + "\n" + elapsedMsText(), false);
                 } else {
-                    setResult(uploadResultEl, "上传失败\nHTTP " + xhr.status + "\n" + text, true);
+                    setResult(uploadResultEl, "Upload failed\nHTTP " + xhr.status + "\n" + text + "\n" + elapsedMsText(), true);
                 }
             };
 
             xhr.onerror = function () {
                 uploadBtn.disabled = false;
-                setResult(uploadResultEl, "上传失败：网络错误或跨域被拦截。", true);
+                setResult(uploadResultEl, "Upload failed: network error or CORS blocked.\n" + elapsedMsText(), true);
             };
 
             xhr.onabort = function () {
                 uploadBtn.disabled = false;
-                setResult(uploadResultEl, "上传已取消。", true);
+                setResult(uploadResultEl, "Upload aborted.\n" + elapsedMsText(), true);
             };
 
             xhr.send(file);

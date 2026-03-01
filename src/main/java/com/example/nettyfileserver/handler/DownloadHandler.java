@@ -33,7 +33,7 @@ public class DownloadHandler {
 
     public void handleDownload(ChannelHandlerContext ctx, HttpRequest request, String filename) {
         Path filePath = dataDir.resolve(filename).normalize();
-        if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {
+        if (!Files.isRegularFile(filePath)) {
             HttpResponseUtil.sendText(ctx, HttpResponseStatus.NOT_FOUND, "File not found\n", HttpUtil.isKeepAlive(request));
             return;
         }
