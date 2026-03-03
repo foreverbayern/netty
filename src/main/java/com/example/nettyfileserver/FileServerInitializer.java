@@ -22,8 +22,11 @@ public class FileServerInitializer extends ChannelInitializer<SocketChannel> {
     @Override
     protected void initChannel(SocketChannel ch) {
         ChannelPipeline pipeline = ch.pipeline();
+        // Decode/encode raw bytes as HTTP objects.
         pipeline.addLast(new HttpServerCodec());
+        // Required for streaming file downloads with HttpChunkedInput/ChunkedFile.
         pipeline.addLast(new ChunkedWriteHandler());
+        // Route upload/download endpoints and drive streaming I/O.
         pipeline.addLast(new HttpRouterHandler(dataDir, uploadIoExecutor));
     }
 }

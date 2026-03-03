@@ -12,7 +12,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 public class UploadHandler {
+    // Optional per-chunk delay for sync upload path (/upload).
     private static final long SLOW_MS = nonNegative(Long.getLong("slow.ms", 0L));
+    // Optional per-chunk delay for async upload path (/upload-async).
     private static final long SLOW_ASYNC_MS = nonNegative(Long.getLong("slow.async.ms", SLOW_MS));
 
     private final Path dataDir;
@@ -67,6 +69,11 @@ public class UploadHandler {
     }
 
     public UploadResult handleChunkBytes(byte[] bytes, boolean lastChunk) throws IOException {
+        // Preserve existing behavior when request-level override is not provided.
+        return handleChunkBytes(bytes, lastChunk, -1L);
+    }
+
+    public UploadResult handleChunkBytes(byte[] bytes, boolean lastChunk, long asyncSleepMsOverride) throws IOException {
         if (currentChannel == null) {
             throw new IllegalStateException("No active upload");
         }
@@ -80,7 +87,7 @@ public class UploadHandler {
                 }
                 bytesWritten += written;
             }
-            maybeSleepAfterChunk(SLOW_ASYNC_MS);
+            maybeSleepAfterChunk(resolveAsyncSleepMs(asyncSleepMsOverride));
         }
 
         if (lastChunk) {
@@ -90,6 +97,14 @@ public class UploadHandler {
         }
 
         return null;
+    }
+
+    private static long resolveAsyncSleepMs(long asyncSleepMsOverride) {
+        // Request param wins; fallback to JVM property-based default.
+        if (asyncSleepMsOverride >= 0L) {
+            return asyncSleepMsOverride;
+        }
+        return SLOW_ASYNC_MS;
     }
 
     public boolean isUploading() {

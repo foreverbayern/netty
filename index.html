@@ -371,6 +371,10 @@
                 <input id="uploadApi" type="hidden" value="/upload">
             </div>
         </div>
+        <div class="row">
+            <label for="uploadSleepMs">async sleepMs</label>
+            <input id="uploadSleepMs" type="text" placeholder="Only for /upload-async, e.g. 20">
+        </div>
         <div class="actions">
             <button id="uploadBtn" type="button">开始上传</button>
         </div>
@@ -406,6 +410,7 @@
         var uploadApiToggleEl = document.getElementById("uploadApiToggle");
         var uploadApiLabelEl = document.getElementById("uploadApiLabel");
         var uploadApiMenuEl = document.getElementById("uploadApiMenu");
+        var uploadSleepMsEl = document.getElementById("uploadSleepMs");
         var uploadBtn = document.getElementById("uploadBtn");
         var uploadProgressEl = document.getElementById("uploadProgress");
         var uploadResultEl = document.getElementById("uploadResult");
@@ -503,6 +508,7 @@
             var file = uploadFileEl.files && uploadFileEl.files[0];
             var filename = sanitizeName(uploadNameEl.value);
             var uploadApi = (uploadApiEl && uploadApiEl.value) ? uploadApiEl.value : "/upload";
+            var sleepMs = sanitizeName(uploadSleepMsEl ? uploadSleepMsEl.value : "");
             var uploadStartedAt = Date.now();
 
             if (!file) {
@@ -513,12 +519,20 @@
                 setResult(uploadResultEl, "请输入服务器文件名。", true);
                 return;
             }
+            if (uploadApi === "/upload-async" && sleepMs && !/^\d+$/.test(sleepMs)) {
+                setResult(uploadResultEl, "sleepMs must be a non-negative integer.", true);
+                return;
+            }
 
             uploadBtn.disabled = true;
             uploadProgressEl.value = 0;
             setResult(uploadResultEl, "上传中...", false);
 
-            var url = API_BASE + uploadApi + "?filename=" + encodeURIComponent(filename);
+            var query = "filename=" + encodeURIComponent(filename);
+            if (uploadApi === "/upload-async" && sleepMs) {
+                query += "&sleepMs=" + encodeURIComponent(sleepMs);
+            }
+            var url = API_BASE + uploadApi + "?" + query;
             var xhr = new XMLHttpRequest();
             var waitingForServer = false;
             xhr.open("POST", url, true);

@@ -54,6 +54,7 @@ public class DownloadHandler {
                 response.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
             }
 
+            // Send response headers first, then stream file content in chunks.
             ctx.write(response);
             ChannelFuture sendFileFuture = ctx.writeAndFlush(
                     new HttpChunkedInput(new ChunkedFile(raf, 0, fileLength, CHUNK_SIZE))
