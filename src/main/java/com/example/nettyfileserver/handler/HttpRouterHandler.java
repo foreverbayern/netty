@@ -60,6 +60,10 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
     private boolean asyncUploadInProgress;
     // 同步上传累计接收字节，用于限流判断。
     private long uploadBytesReceived;
+    // 同步上传是否已切到手动 read 模式。
+    private boolean syncReadPaused;
+    // 是否由本 handler 关闭了 autoRead（用于恢复时判定）。
+    private boolean syncAutoReadManaged;
     // 异步上传累计接收字节，用于限流判断。
     private long asyncUploadBytesReceived;
     // 已排队但未持久化的字节数，用于入站背压。
@@ -79,6 +83,8 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
         this.uploadInProgress = false;
         this.asyncUploadInProgress = false;
         this.uploadBytesReceived = 0L;
+        this.syncReadPaused = false;
+        this.syncAutoReadManaged = false;
         this.asyncUploadBytesReceived = 0L;
         this.asyncPendingWriteBytes = 0L;
         this.asyncChunkSleepMs = ASYNC_SLEEP_UNSET;
@@ -101,7 +107,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
     private void handleRequest(ChannelHandlerContext ctx, HttpRequest request) {
         // 简化语义：同一连接上不允许并发进行两次上传。
         if (uploadInProgress || asyncUploadInProgress) {
-            abortSyncUpload();
+            abortSyncUpload(ctx);
             abortAsyncUpload(ctx);
             HttpResponseUtil.sendText(ctx, HttpResponseStatus.BAD_REQUEST, "Previous upload is not finished\n", false);
             return;
@@ -166,10 +172,12 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
             uploadHandler.beginUpload(filename, keepAlive);
             uploadInProgress = true;
             uploadBytesReceived = 0L;
+            startSyncFlowControl(ctx);
         } catch (IOException ex) {
             uploadHandler.abortAndCleanup();
             uploadInProgress = false;
             uploadBytesReceived = 0L;
+            resetSyncFlowControl(ctx);
             HttpResponseUtil.sendText(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, "Failed to open upload target\n", false);
         }
     }
@@ -261,7 +269,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
         int chunkBytes = content.content().readableBytes();
         if (exceedsLimit(uploadBytesReceived, chunkBytes)) {
             // 一旦超限立即中止并删除临时文件。
-            abortSyncUpload();
+            abortSyncUpload(ctx);
             HttpResponseUtil.sendText(
                     ctx,
                     HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE,
@@ -277,18 +285,17 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
             if (result != null) {
                 uploadInProgress = false;
                 uploadBytesReceived = 0L;
+                resetSyncFlowControl(ctx);
                 String message = "Upload successful: " + result.filename() + ", bytes=" + result.bytesWritten() + "\n";
                 HttpResponseUtil.sendText(ctx, HttpResponseStatus.OK, message, result.keepAlive());
+                return;
             }
+            requestNextSyncChunk(ctx);
         } catch (IllegalStateException ex) {
-            uploadHandler.abortAndCleanup();
-            uploadInProgress = false;
-            uploadBytesReceived = 0L;
+            abortSyncUpload(ctx);
             HttpResponseUtil.sendText(ctx, HttpResponseStatus.BAD_REQUEST, "No active upload\n", false);
         } catch (IOException ex) {
-            uploadHandler.abortAndCleanup();
-            uploadInProgress = false;
-            uploadBytesReceived = 0L;
+            abortSyncUpload(ctx);
             HttpResponseUtil.sendText(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, "Upload failed\n", false);
         }
     }
@@ -393,13 +400,15 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
         HttpResponseUtil.sendText(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, errorMessage, false);
     }
 
-    private void abortSyncUpload() {
+    private void abortSyncUpload(ChannelHandlerContext ctx) {
         uploadBytesReceived = 0L;
         if (!uploadInProgress) {
+            resetSyncFlowControl(ctx);
             return;
         }
         uploadHandler.abortAndCleanup();
         uploadInProgress = false;
+        resetSyncFlowControl(ctx);
     }
 
     private void abortAsyncUpload(ChannelHandlerContext ctx) {
@@ -415,6 +424,37 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
                 .handle((ignored, throwable) -> null)
                 .thenRunAsync(asyncUploadHandler::abortAndCleanup, uploadIoExecutor);
         resetAsyncFlowControl(ctx);
+    }
+
+    private void startSyncFlowControl(ChannelHandlerContext ctx) {
+        // 同步上传切到“手动 read”模式：每处理完一个 chunk 再拉取下一个。
+        syncReadPaused = true;
+        syncAutoReadManaged = ctx.channel().config().isAutoRead();
+        if (syncAutoReadManaged) {
+            ctx.channel().config().setAutoRead(false);
+        }
+        ctx.read();
+    }
+
+    private void requestNextSyncChunk(ChannelHandlerContext ctx) {
+        if (!uploadInProgress || !syncReadPaused) {
+            return;
+        }
+        ctx.read();
+    }
+
+    private void resetSyncFlowControl(ChannelHandlerContext ctx) {
+        if (!syncReadPaused) {
+            syncAutoReadManaged = false;
+            return;
+        }
+        syncReadPaused = false;
+        if (syncAutoReadManaged) {
+            syncAutoReadManaged = false;
+            ensureAutoRead(ctx);
+            return;
+        }
+        syncAutoReadManaged = false;
     }
 
     private void applyAsyncBackpressureIfNeeded(ChannelHandlerContext ctx) {
@@ -457,7 +497,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        abortSyncUpload();
+        abortSyncUpload(ctx);
         abortAsyncUpload(ctx);
         super.channelInactive(ctx);
     }
@@ -465,7 +505,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         // 统一兜底：发生异常后终止上传状态并返回 500。
-        abortSyncUpload();
+        abortSyncUpload(ctx);
         abortAsyncUpload(ctx);
         HttpResponseUtil.sendText(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, "Internal server error\n", false);
     }
