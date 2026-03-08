@@ -22,7 +22,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+/**
+ * 下载处理器：负责读取目标文件并按 HTTP chunked 方式回传给客户端。
+ */
 public class DownloadHandler {
+    // 分块发送尺寸，兼顾吞吐与单次内存占用。
     private static final int CHUNK_SIZE = 8192;
 
     private final Path dataDir;
@@ -54,7 +58,7 @@ public class DownloadHandler {
                 response.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
             }
 
-            // Send response headers first, then stream file content in chunks.
+            // 先回响应头，再流式发送文件内容，避免大文件一次性进内存。
             ctx.write(response);
             ChannelFuture sendFileFuture = ctx.writeAndFlush(
                     new HttpChunkedInput(new ChunkedFile(raf, 0, fileLength, CHUNK_SIZE))
@@ -77,12 +81,12 @@ public class DownloadHandler {
         try {
             raf.close();
         } catch (IOException ignored) {
-            // Ignore close failures.
+            // 下载尾声阶段关闭失败通常无恢复价值，直接忽略。
         }
     }
 
     private static String buildContentDisposition(String filename) {
-        // RFC 5987: use filename* for UTF-8 names, and keep an ASCII fallback in filename.
+        // 按 RFC 5987 返回 UTF-8 文件名，并提供 ASCII 兜底以兼容旧客户端。
         String asciiFallback = filename
                 .replace("\"", "_")
                 .replace("\r", "_")

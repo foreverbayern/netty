@@ -401,6 +401,7 @@
     (function () {
         "use strict";
 
+        // 演示页面默认直连本地后端服务。
         var API_BASE = "http://localhost:8080";
 
         var uploadFileEl = document.getElementById("uploadFile");
@@ -419,6 +420,7 @@
         var downloadBtn = document.getElementById("downloadBtn");
         var downloadResultEl = document.getElementById("downloadResult");
 
+        // 统一结果展示，错误时附加红色样式。
         function setResult(el, msg, isError) {
             el.textContent = msg;
             el.classList.toggle("error", !!isError);
@@ -428,6 +430,7 @@
             return (name || "").trim();
         }
 
+        // 下拉框显隐封装，避免散落的 DOM 状态修改。
         function closeUploadApiMenu() {
             if (!uploadApiSelectEl || !uploadApiToggleEl) {
                 return;
@@ -444,6 +447,7 @@
             uploadApiToggleEl.setAttribute("aria-expanded", "true");
         }
 
+        // 同步更新隐藏值、按钮文案和选项高亮。
         function setUploadApi(value, labelText) {
             if (uploadApiEl) {
                 uploadApiEl.value = value;
@@ -498,12 +502,14 @@
             }
         });
 
+        // 选中文件后自动回填目标文件名，允许用户手动覆盖。
         uploadFileEl.addEventListener("change", function () {
             if (!uploadNameEl.value && uploadFileEl.files && uploadFileEl.files.length > 0) {
                 uploadNameEl.value = uploadFileEl.files[0].name;
             }
         });
 
+        // 上传流程：参数校验 -> 发起 XHR -> 进度回显 -> 响应处理。
         uploadBtn.addEventListener("click", function () {
             var file = uploadFileEl.files && uploadFileEl.files[0];
             var filename = sanitizeName(uploadNameEl.value);
@@ -538,6 +544,7 @@
             xhr.open("POST", url, true);
             xhr.setRequestHeader("Content-Type", "application/octet-stream");
 
+            // 统一的耗时文本，便于观察同步/异步接口差异。
             function elapsedMsText() {
                 var elapsedSec = (Date.now() - uploadStartedAt) / 1000;
                 return "Elapsed: " + elapsedSec.toFixed(3) + " s";
@@ -591,6 +598,7 @@
             xhr.send(file);
         });
 
+        // 下载通过临时 <a> 触发浏览器原生下载能力。
         downloadBtn.addEventListener("click", function () {
             var filename = sanitizeName(downloadNameEl.value);
             if (!filename) {

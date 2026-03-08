@@ -11,10 +11,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
+/**
+ * 单文件上传写入器。
+ * 每次 beginUpload 开启一次会话，后续 chunk 持续追加写入，最后由 LastHttpContent 收尾。
+ */
 public class UploadHandler {
-    // Optional per-chunk delay for sync upload path (/upload).
+    // /upload 路径每个 chunk 的可选延迟，用于模拟慢磁盘。
     private static final long SLOW_MS = nonNegative(Long.getLong("slow.ms", 0L));
-    // Optional per-chunk delay for async upload path (/upload-async).
+    // /upload-async 默认延迟；若未单请求覆盖，则沿用该值。
     private static final long SLOW_ASYNC_MS = nonNegative(Long.getLong("slow.async.ms", SLOW_MS));
 
     private final Path dataDir;
@@ -29,6 +33,7 @@ public class UploadHandler {
     }
 
     public void beginUpload(String filename, boolean keepAlive) throws IOException {
+        // 启动新会话前先清理旧状态，避免句柄泄漏。
         closeChannelQuietly();
         this.currentPath = dataDir.resolve(filename).normalize();
         this.currentChannel = FileChannel.open(
@@ -59,6 +64,7 @@ public class UploadHandler {
             maybeSleepAfterChunk(SLOW_MS);
         }
 
+        // 收到最后一块后关闭通道，并返回响应所需元信息。
         if (httpContent instanceof LastHttpContent) {
             UploadResult result = new UploadResult(currentPath.getFileName().toString(), bytesWritten, keepAlive);
             closeChannelQuietly();
@@ -69,7 +75,7 @@ public class UploadHandler {
     }
 
     public UploadResult handleChunkBytes(byte[] bytes, boolean lastChunk) throws IOException {
-        // Preserve existing behavior when request-level override is not provided.
+        // 未传请求级覆盖值时，保持原有 JVM 参数行为。
         return handleChunkBytes(bytes, lastChunk, -1L);
     }
 
@@ -100,7 +106,7 @@ public class UploadHandler {
     }
 
     private static long resolveAsyncSleepMs(long asyncSleepMsOverride) {
-        // Request param wins; fallback to JVM property-based default.
+        // 请求参数优先；未设置时回退到 JVM 属性。
         if (asyncSleepMsOverride >= 0L) {
             return asyncSleepMsOverride;
         }
@@ -118,7 +124,7 @@ public class UploadHandler {
             try {
                 Files.deleteIfExists(pathToDelete);
             } catch (IOException ignored) {
-                // Ignore cleanup failures during abort.
+                // 中止路径下的清理失败不影响连接语义，记录即可。
             }
         }
     }
@@ -128,7 +134,7 @@ public class UploadHandler {
             try {
                 currentChannel.close();
             } catch (IOException ignored) {
-                // Ignore close failures.
+                // 关闭失败不再重试，避免阻塞 EventLoop。
             }
             currentChannel = null;
         }
@@ -145,6 +151,7 @@ public class UploadHandler {
             Thread.sleep(sleepMs);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+            // 将中断语义上抛给调用方，避免静默吞掉中断信号。
             throw new IOException("Interrupted while applying upload delay", ex);
         }
     }

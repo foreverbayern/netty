@@ -12,6 +12,9 @@ import io.netty.handler.codec.http.HttpVersion;
 
 import java.nio.charset.StandardCharsets;
 
+/**
+ * 文本响应与空响应的公共封装，统一 CORS/连接关闭策略。
+ */
 public final class HttpResponseUtil {
     private HttpResponseUtil() {
     }
@@ -31,6 +34,7 @@ public final class HttpResponseUtil {
             response.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
         }
 
+        // 非 keep-alive 请求在响应发送完后主动断开连接。
         ChannelFuture future = ctx.writeAndFlush(response);
         if (!keepAlive) {
             future.addListener(ChannelFutureListener.CLOSE);
@@ -48,6 +52,7 @@ public final class HttpResponseUtil {
             response.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
         }
 
+        // OPTIONS 预检等场景会走这里，规则与 sendText 保持一致。
         ChannelFuture future = ctx.writeAndFlush(response);
         if (!keepAlive) {
             future.addListener(ChannelFutureListener.CLOSE);

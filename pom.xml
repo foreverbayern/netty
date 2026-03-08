@@ -11,6 +11,7 @@
     <description>Netty chunked upload/download example</description>
 
     <properties>
+        <!-- 统一源码编码，确保中文注释与字符串不乱码 -->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
@@ -40,6 +41,7 @@
                 <artifactId>maven-assembly-plugin</artifactId>
                 <version>3.7.1</version>
                 <configuration>
+                    <!-- 生成可直接运行的 fat jar -->
                     <archive>
                         <manifest>
                             <mainClass>com.example.nettyfileserver.FileServerApplication</mainClass>

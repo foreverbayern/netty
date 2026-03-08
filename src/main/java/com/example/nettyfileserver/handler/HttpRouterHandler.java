@@ -23,13 +23,20 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 
+/**
+ * HTTP 路由入口。
+ * 在单个连接内管理上传/下载状态，并协调异步上传的排队与背压。
+ */
 public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
+    // 单次上传最大允许字节数（同步与异步路径共享）。
     private static final long MAX_UPLOAD_BYTES = 200L * 1024 * 1024;
+    // 异步上传未指定 sleepMs 时的哨兵值。
     private static final long ASYNC_SLEEP_UNSET = -1L;
+    // 接口参数 sleepMs 的上限，避免人为配置过大阻塞。
     private static final long MAX_ASYNC_SLEEP_MS = 60_000L;
     private static final long DEFAULT_ASYNC_QUEUE_HIGH_WATERMARK_BYTES = 8L * 1024 * 1024;
     private static final long DEFAULT_ASYNC_QUEUE_LOW_WATERMARK_BYTES = 4L * 1024 * 1024;
-    // Pending async write bytes >= HIGH: pause socket read; <= LOW: resume read.
+    // 待落盘字节 >= 高水位时暂停读；回落到低水位后恢复读。
     private static final long ASYNC_QUEUE_HIGH_WATERMARK_BYTES =
             Math.max(64L * 1024L, Long.getLong("upload.async.queue.high.bytes", DEFAULT_ASYNC_QUEUE_HIGH_WATERMARK_BYTES));
     private static final long ASYNC_QUEUE_LOW_WATERMARK_BYTES =
@@ -38,18 +45,30 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
                     Math.max(32L * 1024L, Long.getLong("upload.async.queue.low.bytes", DEFAULT_ASYNC_QUEUE_LOW_WATERMARK_BYTES))
             );
 
+    // 同步上传会话状态。
     private final UploadHandler uploadHandler;
+    // 异步上传会话状态（与同步路径隔离，便于独立清理）。
     private final UploadHandler asyncUploadHandler;
+    // 下载处理器。
     private final DownloadHandler downloadHandler;
+    // 异步落盘线程池。
     private final ExecutorService uploadIoExecutor;
 
+    // 同步上传是否进行中。
     private boolean uploadInProgress;
+    // 异步上传是否进行中。
     private boolean asyncUploadInProgress;
+    // 同步上传累计接收字节，用于限流判断。
     private long uploadBytesReceived;
+    // 异步上传累计接收字节，用于限流判断。
     private long asyncUploadBytesReceived;
+    // 已排队但未持久化的字节数，用于入站背压。
     private long asyncPendingWriteBytes;
+    // 当前异步上传请求的每 chunk 延迟参数。
     private long asyncChunkSleepMs;
+    // 是否已关闭 autoRead 以施加背压。
     private boolean asyncReadPaused;
+    // 异步任务链，保证 chunk 的落盘顺序。
     private CompletableFuture<Void> asyncUploadChain;
 
     public HttpRouterHandler(Path dataDir, ExecutorService uploadIoExecutor) {
@@ -69,6 +88,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, HttpObject msg) {
+        // 一个 HTTP 请求会拆成 HttpRequest + 若干 HttpContent，这里分别处理。
         if (msg instanceof HttpRequest request) {
             handleRequest(ctx, request);
         }
@@ -79,6 +99,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
     }
 
     private void handleRequest(ChannelHandlerContext ctx, HttpRequest request) {
+        // 简化语义：同一连接上不允许并发进行两次上传。
         if (uploadInProgress || asyncUploadInProgress) {
             abortSyncUpload();
             abortAsyncUpload(ctx);
@@ -94,11 +115,13 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
         QueryStringDecoder query = new QueryStringDecoder(request.uri());
         String path = query.path();
 
+        // 上传（同步落盘）。
         if (HttpMethod.POST.equals(request.method()) && "/upload".equals(path)) {
             handleUploadRequest(ctx, request, query.parameters());
             return;
         }
 
+        // 上传（异步线程池落盘）。
         if (HttpMethod.POST.equals(request.method()) && "/upload-async".equals(path)) {
             handleAsyncUploadRequest(ctx, request, query.parameters());
             return;
@@ -135,6 +158,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
             return;
         }
         if (HttpUtil.is100ContinueExpected(request)) {
+            // 客户端带 Expect: 100-continue 时先放行再接收 body。
             ctx.writeAndFlush(new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.CONTINUE));
         }
 
@@ -157,6 +181,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
             return;
         }
 
+        // 具体文件读写由 DownloadHandler 负责。
         downloadHandler.handleDownload(ctx, request, filename);
     }
 
@@ -180,7 +205,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
 
         long sleepMs;
         try {
-            // sleepMs is only for async upload simulation; sync path still uses slow.ms.
+            // sleepMs 仅作用于 /upload-async，用于模拟异步落盘延迟。
             sleepMs = parseAsyncSleepMs(firstParam(params, "sleepMs"));
         } catch (IllegalArgumentException ex) {
             HttpResponseUtil.sendText(ctx, HttpResponseStatus.BAD_REQUEST, buildInvalidSleepMessage(), keepAlive);
@@ -196,8 +221,10 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
         asyncPendingWriteBytes = 0L;
         asyncChunkSleepMs = sleepMs;
         asyncReadPaused = false;
+        // 保证开始异步上传前连接处于可读状态。
         ensureAutoRead(ctx);
 
+        // 先异步创建目标文件，后续 chunk 才能入队写入。
         enqueueAsyncUploadTask(
                 ctx,
                 "Failed to open upload target\n",
@@ -212,6 +239,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
     }
 
     private void handleContent(ChannelHandlerContext ctx, HttpContent content) {
+        // 根据当前会话状态，把 body chunk 分发到对应上传路径。
         if (uploadInProgress) {
             handleSyncUploadContent(ctx, content);
             return;
@@ -222,7 +250,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
             return;
         }
 
-        // Many normal requests include EMPTY_LAST_CONTENT at the end; ignore it when no upload is active.
+        // 普通请求尾部常附带空 LastHttpContent，此处直接忽略。
         if (content instanceof LastHttpContent && !content.content().isReadable()) {
             return;
         }
@@ -232,6 +260,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
     private void handleSyncUploadContent(ChannelHandlerContext ctx, HttpContent content) {
         int chunkBytes = content.content().readableBytes();
         if (exceedsLimit(uploadBytesReceived, chunkBytes)) {
+            // 一旦超限立即中止并删除临时文件。
             abortSyncUpload();
             HttpResponseUtil.sendText(
                     ctx,
@@ -278,14 +307,14 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
         }
         asyncUploadBytesReceived += chunkBytes;
 
-        // HttpContent will be auto-released after channelRead0 returns, so copy bytes now.
+        // channelRead0 返回后 HttpContent 会被释放，需先复制出原始字节。
         byte[] bytes = new byte[chunkBytes];
         content.content().getBytes(content.content().readerIndex(), bytes);
         boolean lastChunk = content instanceof LastHttpContent;
         long sleepMs = asyncChunkSleepMs;
 
         asyncPendingWriteBytes += chunkBytes;
-        // Apply inbound backpressure before queueing another async disk write task.
+        // 入队前先评估背压，避免继续从 socket 读取过多数据。
         applyAsyncBackpressureIfNeeded(ctx);
 
         enqueueAsyncUploadTask(
@@ -308,7 +337,8 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
             UploadIoTask task,
             AsyncUploadSuccess onSuccess
     ) {
-        // Chain tasks to preserve write order; always hop completion back to EventLoop.
+        // 用 CompletableFuture 串行拼接任务，保证 chunk 按接收顺序落盘。
+        // 回调切回 EventLoop 执行，避免并发修改 handler 状态。
         asyncUploadChain = asyncUploadChain.thenCompose(ignored ->
                 CompletableFuture
                         .supplyAsync(() -> runUploadTask(task), uploadIoExecutor)
@@ -333,6 +363,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
         try {
             return task.run();
         } catch (IOException ex) {
+            // 统一转换为 CompletionException，便于上游在异步链里处理。
             throw new CompletionException(ex);
         }
     }
@@ -357,6 +388,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
         asyncUploadBytesReceived = 0L;
         asyncUploadChain = CompletableFuture.completedFuture(null);
         resetAsyncFlowControl(ctx);
+        // 清理文件在 I/O 线程执行，避免阻塞 EventLoop。
         CompletableFuture.runAsync(asyncUploadHandler::abortAndCleanup, uploadIoExecutor);
         HttpResponseUtil.sendText(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, errorMessage, false);
     }
@@ -377,6 +409,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
             resetAsyncFlowControl(ctx);
             return;
         }
+        // 等待已入队任务链结束后再清理，避免与写文件并发冲突。
         asyncUploadInProgress = false;
         asyncUploadChain = asyncUploadChain
                 .handle((ignored, throwable) -> null)
@@ -388,7 +421,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
         if (asyncReadPaused || asyncPendingWriteBytes < ASYNC_QUEUE_HIGH_WATERMARK_BYTES) {
             return;
         }
-        // Too much pending disk work: stop reading more bytes from the socket.
+        // 待写入积压过高，临时关闭 autoRead，阻止继续吸收网络数据。
         asyncReadPaused = true;
         ctx.channel().config().setAutoRead(false);
     }
@@ -398,7 +431,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
             asyncPendingWriteBytes = Math.max(0L, asyncPendingWriteBytes - queuedBytes);
         }
         if (asyncReadPaused && asyncPendingWriteBytes <= ASYNC_QUEUE_LOW_WATERMARK_BYTES) {
-            // Queue drained enough: re-enable socket reads.
+            // 积压回落到低水位后恢复读取，形成高低水位滞回控制。
             asyncReadPaused = false;
             ensureAutoRead(ctx);
         }
@@ -417,6 +450,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
         if (ctx.channel().config().isAutoRead()) {
             return;
         }
+        // 重新打开 autoRead 后主动 read 一次，尽快恢复消费。
         ctx.channel().config().setAutoRead(true);
         ctx.read();
     }
@@ -430,12 +464,14 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        // 统一兜底：发生异常后终止上传状态并返回 500。
         abortSyncUpload();
         abortAsyncUpload(ctx);
         HttpResponseUtil.sendText(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, "Internal server error\n", false);
     }
 
     private static String firstParam(Map<String, List<String>> params, String name) {
+        // 仅取首个同名参数，避免多值参数带来的歧义。
         List<String> values = params.get(name);
         if (values == null || values.isEmpty()) {
             return null;
@@ -455,6 +491,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
     }
 
     private static boolean hasDeclaredLengthTooLarge(HttpRequest request) {
+        // 若请求头已声明 content-length，先做早期拒绝。
         long contentLength = HttpUtil.getContentLength(request, -1L);
         return contentLength > MAX_UPLOAD_BYTES;
     }
@@ -470,6 +507,7 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
             }
             return sleepMs;
         } catch (NumberFormatException ex) {
+            // 统一转成 IllegalArgumentException 供上层返回 400。
             throw new IllegalArgumentException("sleepMs is not a number", ex);
         }
     }
@@ -480,11 +518,13 @@ public class HttpRouterHandler extends SimpleChannelInboundHandler<HttpObject> {
 
     @FunctionalInterface
     private interface UploadIoTask {
+        // 在上传 I/O 线程中执行的任务抽象。
         UploadHandler.UploadResult run() throws IOException;
     }
 
     @FunctionalInterface
     private interface AsyncUploadSuccess {
+        // 异步任务成功后在 EventLoop 中执行的回调。
         void onSuccess(UploadHandler.UploadResult result);
     }
 }
