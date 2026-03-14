@@ -5,6 +5,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.util.ResourceLeakDetector;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,6 +35,8 @@ public final class FileServerApplication {
         Path dataDir = Path.of("data");
         Files.createDirectories(dataDir);
         int uploadIoThreads = Integer.getInteger("upload.io.threads", DEFAULT_UPLOAD_IO_THREADS);
+        ResourceLeakDetector.Level leakDetectionLevel = resolveLeakDetectionLevel();
+        ResourceLeakDetector.setLevel(leakDetectionLevel);
 
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup(WORKER_THREADS);
@@ -52,6 +55,7 @@ public final class FileServerApplication {
             System.out.println("Netty file server started on port " + port);
             System.out.println("Data directory: " + dataDir.toAbsolutePath());
             System.out.println("Upload IO pool threads: " + Math.max(1, uploadIoThreads));
+            System.out.println("Netty leak detection level: " + leakDetectionLevel);
             channel.closeFuture().sync();
         } finally {
             bossGroup.shutdownGracefully().sync();
@@ -91,6 +95,22 @@ public final class FileServerApplication {
         }
         String value = arg.substring(separator + 1);
         System.setProperty(key, value);
+    }
+
+    private static ResourceLeakDetector.Level resolveLeakDetectionLevel() {
+        String configuredLevel = System.getProperty("io.netty.leakDetection.level");
+        if (configuredLevel == null || configuredLevel.isBlank()) {
+            configuredLevel = System.getProperty("io.netty.leakDetectionLevel");
+        }
+        if (configuredLevel == null || configuredLevel.isBlank()) {
+            configuredLevel = "ADVANCED";
+        }
+        try {
+            return ResourceLeakDetector.Level.valueOf(configuredLevel.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            System.out.println("Invalid leak detection level: " + configuredLevel + ", fallback=ADVANCED");
+            return ResourceLeakDetector.Level.ADVANCED;
+        }
     }
 
     private static ThreadFactory namedThreadFactory(String prefix) {
